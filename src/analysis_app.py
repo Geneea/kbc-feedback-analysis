@@ -285,9 +285,9 @@ class AnalysisApp:
 
     def copy_analysis(self, source_analysis, target_analysis):
         target_analysis['usedChars'] += source_analysis['usedChars']
-        target_analysis['sentences'].append(source_analysis['sentences'])
-        target_analysis['entities'].append(source_analysis['entities'])
-        target_analysis['relations'].append(source_analysis['relations'])
+        target_analysis['sentences'] += source_analysis['sentences']
+        target_analysis['entities'] += source_analysis['entities']
+        target_analysis['relations'] += source_analysis['relations']
 
     def analysis_to_doc_result(self, doc_analysis):
         doc_ids_vals = zip(self.params.id_cols, json.loads(doc_analysis['id']))
@@ -308,74 +308,71 @@ class AnalysisApp:
         yield doc_res
 
     def analysis_to_snt_result(self, doc_analysis):
-        if 'sentences' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for index, snt in enumerate(doc_analysis['sentences']):
-                snt_res = {
-                    'index': index,
-                    'segment': snt['segment'],
-                    'text': snt['text']
-                }
-                if 'sentiment' in snt:
-                    snt_res['sentimentValue'] = snt['sentiment']['value']
-                    snt_res['sentimentPolarity'] = snt['sentiment']['polarity']
-                    snt_res['sentimentLabel'] = snt['sentiment']['label']
-                else:
-                    snt_res['sentimentValue'] = None
-                    snt_res['sentimentPolarity'] = None
-                    snt_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    snt_res[id_col] = val
-                yield snt_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for index, snt in enumerate(doc_analysis['sentences']):
+            snt_res = {
+                'index': index,
+                'segment': snt['segment'],
+                'text': snt['text']
+            }
+            if 'sentiment' in snt:
+                snt_res['sentimentValue'] = snt['sentiment']['value']
+                snt_res['sentimentPolarity'] = snt['sentiment']['polarity']
+                snt_res['sentimentLabel'] = snt['sentiment']['label']
+            else:
+                snt_res['sentimentValue'] = None
+                snt_res['sentimentPolarity'] = None
+                snt_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                snt_res[id_col] = val
+            yield snt_res
 
     def analysis_to_ent_result(self, doc_analysis):
-        if 'entities' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for ent in doc_analysis['entities']:
-                ent_res = {
-                    'type': ent['type'],
-                    'text': ent['text'],
-                    'score': ent['score'],
-                    'entityUid': ent.get('uid')
-                }
-                if 'sentiment' in ent:
-                    ent_res['sentimentValue'] = ent['sentiment']['value']
-                    ent_res['sentimentPolarity'] = ent['sentiment']['polarity']
-                    ent_res['sentimentLabel'] = ent['sentiment']['label']
-                else:
-                    ent_res['sentimentValue'] = None
-                    ent_res['sentimentPolarity'] = None
-                    ent_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    ent_res[id_col] = val
-                yield ent_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for ent in doc_analysis['entities']:
+            ent_res = {
+                'type': ent['type'],
+                'text': ent['text'],
+                'score': ent['score'],
+                'entityUid': ent.get('uid')
+            }
+            if 'sentiment' in ent:
+                ent_res['sentimentValue'] = ent['sentiment']['value']
+                ent_res['sentimentPolarity'] = ent['sentiment']['polarity']
+                ent_res['sentimentLabel'] = ent['sentiment']['label']
+            else:
+                ent_res['sentimentValue'] = None
+                ent_res['sentimentPolarity'] = None
+                ent_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                ent_res[id_col] = val
+            yield ent_res
 
     def analysis_to_rel_result(self, doc_analysis):
-        if 'relations' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for rel in doc_analysis['relations']:
-                rel_res = {
-                    'type': rel['type'],
-                    'name': rel['name'],
-                    'negated': rel['negated'],
-                    'subject': rel.get('subjectName'),
-                    'subjectType': rel.get('subjectType'),
-                    'subjectUid': rel.get('subjectUid'),
-                    'object': rel.get('objectName'),
-                    'objectType': rel.get('objectType'),
-                    'objectUid': rel.get('objectUid')
-                }
-                if 'sentiment' in rel:
-                    rel_res['sentimentValue'] = rel['sentiment']['value']
-                    rel_res['sentimentPolarity'] = rel['sentiment']['polarity']
-                    rel_res['sentimentLabel'] = rel['sentiment']['label']
-                else:
-                    rel_res['sentimentValue'] = None
-                    rel_res['sentimentPolarity'] = None
-                    rel_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    rel_res[id_col] = val
-                yield rel_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for rel in doc_analysis['relations']:
+            rel_res = {
+                'type': rel['type'],
+                'name': rel['name'],
+                'negated': rel['negated'],
+                'subject': rel.get('subjectName'),
+                'subjectType': rel.get('subjectType'),
+                'subjectUid': rel.get('subjectUid'),
+                'object': rel.get('objectName'),
+                'objectType': rel.get('objectType'),
+                'objectUid': rel.get('objectUid')
+            }
+            if 'sentiment' in rel:
+                rel_res['sentimentValue'] = rel['sentiment']['value']
+                rel_res['sentimentPolarity'] = rel['sentiment']['polarity']
+                rel_res['sentimentLabel'] = rel['sentiment']['label']
+            else:
+                rel_res['sentimentValue'] = None
+                rel_res['sentimentPolarity'] = None
+                rel_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                rel_res[id_col] = val
+            yield rel_res
 
     def analysis_to_full_result(self, doc_analysis):
         full_res = {
