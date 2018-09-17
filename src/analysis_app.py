@@ -134,6 +134,17 @@ class AnalysisApp:
         self.params = Params.init(data_dir)
         self.validate_input()
 
+        self.sect_to_segm = {
+            'text': 'text',
+            'positives': 'title',
+            'negatives': 'lead'
+        }
+        self.segm_to_sect = {
+            'text': 'text',
+            'title': 'positives',
+            'lead': 'negatives'
+        }
+
     def validate_input(self):
         with open(self.params.source_tab_path, 'r', encoding='utf-8') as in_tab:
             try:
@@ -235,17 +246,17 @@ class AnalysisApp:
         ids = [row[id_col] for id_col in self.params.id_cols]
         yield {
             'id': json.dumps(['txt'] + ids),
-            'text': join_cols(self.params.txt_cols)
+            self.sect_to_segm['text']: join_cols(self.params.txt_cols)
         }
         if self.params.pos_cols:
             yield {
                 'id': json.dumps(['pos'] + ids),
-                'title': join_cols(self.params.pos_cols)
+                self.sect_to_segm['positives']: join_cols(self.params.pos_cols)
             }
         if self.params.neg_cols:
             yield {
                 'id': json.dumps(['neg'] + ids),
-                'lead': join_cols(self.params.pos_cols)
+                self.sect_to_segm['negatives']: join_cols(self.params.pos_cols)
             }
 
     def proc_batch_analysis(self, batch_analysis):
@@ -312,7 +323,7 @@ class AnalysisApp:
         for index, snt in enumerate(doc_analysis['sentences']):
             snt_res = {
                 'index': index,
-                'segment': snt['segment'],
+                'segment': self.segm_to_sect[snt['segment']],
                 'text': snt['text']
             }
             if 'sentiment' in snt:
