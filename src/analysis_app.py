@@ -283,7 +283,7 @@ class AnalysisApp:
         feedback_entities = [e for e in entities if e['type'] in self.params.feedback_entities]
         for ent in feedback_entities:
             polarity = ent.get('sentiment', {}).get('polarity', 0)
-            if doc_type == 'pos' or (doc_type == 'txt' and polarity > 0):
+            if doc_type == 'pos' or (doc_type == 'txt' and polarity >= 0):
                 pos_ent = dict(ent)
                 pos_ent['type'] += '-pos'
                 pos_ent.pop('sentiment', None)
