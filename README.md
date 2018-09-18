@@ -5,14 +5,12 @@ Integration of the [Geneea API](https://api.geneea.com) with [Keboola Connection
 This is a Docker container used for running user-feedback NLP analysis jobs in the KBC.
 Automatically built Docker images are available at [Docker Hub Registry](https://hub.docker.com/r/geneea/kbc-feedback-analysis/).
 
-The supported NLP analysis types are: `sentiment`, `entities`, `tags`, `relations`.
-
 ## Building a container
 To build this container manually one can use:
 
 ```
 git clone https://github.com/Geneea/kbc-feedback-analysis.git
-cd kkbc-feedback-analysis
+cd kbc-feedback-analysis
 sudo docker build --no-cache -t geneea/kbc-feedback-analysis .
 ```
 
