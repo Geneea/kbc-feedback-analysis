@@ -1,67 +1,20 @@
-# User feedback analysis in KBC using Geneea NLP platform
+Input:
+* `id` - ID of the user comment
+* `text` - main text of the user-feedback
+* `positives` - section with positive comments
+* `negatives` - section with negative comments
 
-Integration of the [Geneea API](https://api.geneea.com) with [Keboola Connection](https://connection.keboola.com).
+Input options:
+* `language` - the language of the text; leave empty for automatic detection
+* `domain` - the domain or type of the text
+* `feedback_entities` - entity types which should be analyzed for sentiment
+* `correction` - indicates whether common typos should be corrected before analysis
+* `diacritization` - before analysing Czech text where diacritics are missing, add all the wedges and accents. For example, _Muj ctyrnohy pritel_ is changed to _Můj čtyřnohý přítel_.
+* `use_beta` - use Geneea's beta server (use only when instructed to do so)
+* `advanced` - additional parameters as a JSON object (use only when instructed to do so)
 
-This is a Docker container used for running user-feedback NLP analysis jobs in the KBC.
-Automatically built Docker images are available at [Docker Hub Registry](https://hub.docker.com/r/geneea/kbc-feedback-analysis/).
 
-The supported NLP analysis types are: `sentiment`, `entities`, `tags`, `relations`.
-
-## Building a container
-To build this container manually one can use:
-
-```
-git clone https://github.com/Geneea/kbc-feedback-analysis.git
-cd kkbc-feedback-analysis
-sudo docker build --no-cache -t geneea/kbc-feedback-analysis .
-```
-
-## Running a container
-This container can be run from the Registry using:
-
-```
-sudo docker run \
---volume=/home/ec2-user/data:/data \
---rm \
-geneea/kbc-feedback-analysis:latest
-```
-Note: `--volume` needs to be adjusted accordingly.
-
-## Sample configuration
-Mapped to `/data/config.json`
-
-```
-{
-  "storage": {
-    "input": {
-      "tables": [
-        {
-          "destination": "comments.csv"
-        }
-      ]
-    }
-  },
-  "parameters": {
-    "user_key": "<ENTER API KEY HERE>",
-    "columns": {
-      "id": ["feedback_id"],
-      "text": ["summary"],
-      "positives": ["pos_1", "pos_2"],
-      "negatives": ["neg_1", "neg_2"]
-    },
-    "language": "cs",
-    "domain": "retail",
-    "feedback_entities": ["service", "product"],
-    "correction": "aggresive",
-    "diacritization": "auto",
-    "use_beta": false
-  }
-}
-```
-
-## Output format
-
-The results of the NLP analysis are written into five tables.
+The result contains five tables:
 
 * `analysis-result-comments.csv` with comment-level results in the following columns:
     * all `id` columns from the input table (used as primary keys)
@@ -80,6 +33,8 @@ The results of the NLP analysis are written into five tables.
     * `sentimentPolarity` detected sentiment of the sentence (_-1_, _0_ or _1_)
     * `sentimentLabel` sentiment of the sentence as a label (_negative_, _neutral_ or _positive_)
 
+  There are multiple rows per one comment. All `id` columns plus the `index` column are part of the primary key.
+
 * `analysis-result-entities.csv` with entity-level results has the following columns:
     * all `id` columns from the input table (used as primary keys)
     * `type` type of the found entity, e.g. _person_, _organization_ or _tag_, (primary key)
@@ -89,6 +44,10 @@ The results of the NLP analysis are written into five tables.
     * `sentimentValue` detected sentiment of the entity, from an interval _\[-1.0; 1.0\]_
     * `sentimentPolarity` detected sentiment of the entity (_-1_, _0_ or _1_)
     * `sentimentLabel` sentiment of the entity as a label (_negative_, _neutral_ or _positive_)
+
+  There are multiple rows per one comment. All `id` columns plus the `type` and `text` columns are part of the primary key.
+
+  Note that the table also contains topic tags, marked as _tag_ in the `type` column.
 
 * `analysis-result-relations.csv` with relations-level results has the following columns:
     * all `id` columns from the input table (used as primary keys)
@@ -103,6 +62,8 @@ The results of the NLP analysis are written into five tables.
     * `sentimentValue` detected sentiment of the relation, from an interval _\[-1.0; 1.0\]_
     * `sentimentPolarity` detected sentiment of the relation (_-1_, _0_ or _1_)
     * `sentimentLabel` sentiment of the relation as a label (_negative_, _neutral_ or _positive_)
+
+  There are multiple rows per one comment. All `id` columns plus the `type`, `name`, `subject` and `object` columns are part of the primary key.
 
 * `analysis-result-full.csv` with full analysis results in the following columns:
     * all `id` columns from the input table (used as primary keys)

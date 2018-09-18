@@ -8,6 +8,7 @@ import sys
 
 import requests
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 from keboola import docker
@@ -16,12 +17,10 @@ from kbc_tools import read_csv, csv_writer, slice_stream, make_batch_request, pa
 
 BASE_URL = 'https://api.geneea.com/keboola/v2/analysis'
 BETA_URL = 'https://beta-api.geneea.com/keboola/v2/analysis'
-DOC_BATCH_SIZE = 12
-THREAD_COUNT = 1
+DOC_BATCH_SIZE = 10
+THREAD_COUNT = 2
 
-ANALYSIS_TYPES = frozenset(['sentiment', 'entities', 'tags', 'relations'])
-
-OUT_TAB_DOC = 'analysis-result-documents.csv'
+OUT_TAB_DOC = 'analysis-result-comments.csv'
 OUT_TAB_SNT = 'analysis-result-sentences.csv'
 OUT_TAB_ENT = 'analysis-result-entities.csv'
 OUT_TAB_REL = 'analysis-result-relations.csv'
@@ -39,7 +38,7 @@ class Params:
 
         self.user_key = self.get_user_key()
         self.source_tab_path = self.get_source_tab_path()
-        self.analysis_types = self.get_analysis_types()
+        self.feedback_entities = self.get_feedback_entities()
 
         params = self.get_parameters()
         columns = params.get('columns', {})
@@ -47,20 +46,19 @@ class Params:
             columns = {}
 
         self.id_cols = columns.get('id', [])
-        self.text_cols = columns.get('text', [])
-        self.title_cols = columns.get('title', [])
-        self.lead_cols = columns.get('lead', [])
+        self.txt_cols = columns.get('text', [])
+        self.pos_cols = columns.get('positives', [])
+        self.neg_cols = columns.get('negatives', [])
         self.language = params.get('language')
         self.domain = params.get('domain')
-        self.correction = params.get('correction')
-        self.diacritization = params.get('diacritization')
+        self.correction = params.get('correction', 'AGGRESSIVE')
+        self.diacritization = params.get('diacritization', 'yes')
         self.use_beta = params.get('use_beta', False)
 
         advanced_params = self.get_advanced_params()
         self.doc_batch_size = int(advanced_params.get('doc_batch_size', DOC_BATCH_SIZE))
         self.thread_count = int(advanced_params.get('thread_count', THREAD_COUNT))
         self.reference_date = advanced_params.get('reference_date')
-        self.full_analysis_output = bool(int(advanced_params.get('full_analysis_output', 0)))
 
         self.validate()
 
@@ -76,8 +74,8 @@ class Params:
         in_tabs = self.config.get_input_tables()
         return in_tabs[0]['full_path'] if len(in_tabs) == 1 else None
 
-    def get_analysis_types(self):
-        types = self.get_parameters().get('analysis_types', [])
+    def get_feedback_entities(self):
+        types = self.get_parameters().get('feedback_entities', [])
         return set(t.strip().lower() for t in types if isinstance(t, str))
 
     def get_config_data(self):
@@ -101,11 +99,11 @@ class Params:
             raise ValueError('the "user_key" parameter has to be provided')
         if self.source_tab_path is None:
             raise ValueError('exactly one INPUT table mapping needs to be specified')
-        if not self.id_cols or not self.text_cols:
+        if not self.id_cols or not self.txt_cols:
             raise ValueError('the "columns.id" and "columns.text" are required parameters')
-        if self.analysis_types and len(self.analysis_types - ANALYSIS_TYPES) > 0:
-            raise ValueError('invalid "analysisTypes" parameter, allowed values are {types}'.format(types=ANALYSIS_TYPES))
-        for cols in (self.id_cols, self.text_cols, self.title_cols, self.lead_cols):
+        if not self.feedback_entities:
+            raise ValueError('invalid "feedback_entities" parameter')
+        for cols in (self.id_cols, self.txt_cols, self.pos_cols, self.neg_cols):
             if not isinstance(cols, list):
                 raise ValueError('invalid "column" parameter, all values need to be an array of column names')
         for id_col in self.id_cols:
@@ -136,6 +134,17 @@ class AnalysisApp:
         self.params = Params.init(data_dir)
         self.validate_input()
 
+        self.sect_to_segm = {
+            'text': 'text',
+            'positives': 'title',
+            'negatives': 'lead'
+        }
+        self.segm_to_sect = {
+            'text': 'text',
+            'title': 'positives',
+            'lead': 'negatives'
+        }
+
     def validate_input(self):
         with open(self.params.source_tab_path, 'r', encoding='utf-8') as in_tab:
             try:
@@ -144,13 +153,13 @@ class AnalysisApp:
                 print('WARN: could not read any data from the source table')
                 sys.stdout.flush()
                 return
-            all_cols = self.params.id_cols + self.params.text_cols + self.params.title_cols + self.params.lead_cols
+            all_cols = self.params.id_cols + self.params.txt_cols + self.params.pos_cols + self.params.neg_cols
             for col in all_cols:
                 if col not in row:
                     raise ValueError('the source table does not contain column "{col}"'.format(col=col))
 
     def run(self):
-        print('starting NLP analysis with features {types}'.format(types=self.params.analysis_types))
+        print('starting NLP analysis of user-feedback comments')
         sys.stdout.flush()
         doc_count = 0
         used_chars = 0
@@ -172,37 +181,25 @@ class AnalysisApp:
             rel_writer = csv_writer(out_tab_rel, fields=self.get_rel_tab_fields())
             full_writer = csv_writer(out_tab_full, fields=self.get_full_tab_fields())
 
-            for doc_analysis in self.analyze(read_csv(in_tab)):
-                doc_writer.writerows(self.analysis_to_doc_result(doc_analysis))
-                snt_writer.writerows(self.analysis_to_snt_result(doc_analysis))
-                ent_writer.writerows(self.analysis_to_ent_result(doc_analysis))
-                rel_writer.writerows(self.analysis_to_rel_result(doc_analysis))
-                full_writer.writerows(self.analysis_to_full_result(doc_analysis))
+            for batch_analysis in self.analyze(read_csv(in_tab)):
+                for doc_analysis in self.proc_batch_analysis(batch_analysis):
+                    doc_writer.writerows(self.analysis_to_doc_result(doc_analysis))
+                    snt_writer.writerows(self.analysis_to_snt_result(doc_analysis))
+                    ent_writer.writerows(self.analysis_to_ent_result(doc_analysis))
+                    rel_writer.writerows(self.analysis_to_rel_result(doc_analysis))
+                    full_writer.writerows(self.analysis_to_full_result(doc_analysis))
 
-                doc_count += 1
-                used_chars += int(doc_analysis['usedChars'])
-                if doc_count % 1000 == 0:
-                    self.write_usage(doc_count=doc_count, used_chars=used_chars)
-                    print('successfully analyzed {n} documents with {ch} characters'.format(n=doc_count, ch=used_chars))
-                    sys.stdout.flush()
+                    doc_count += 1
+                    used_chars += int(doc_analysis['usedChars'])
+                    if doc_count % 1000 == 0:
+                        self.write_usage(doc_count=doc_count, used_chars=used_chars)
+                        print('successfully analyzed {n} documents with {ch} characters'.format(n=doc_count, ch=used_chars))
+                        sys.stdout.flush()
 
         self.write_usage(doc_count=doc_count, used_chars=used_chars)
         self.write_manifest(doc_tab_path=out_tab_doc_path, snt_tab_path=out_tab_snt_path,
                             ent_tab_path=out_tab_ent_path, rel_tab_path=out_tab_rel_path,
                             full_tab_path=out_tab_full_path)
-
-        if self.params.analysis_types and not 'sentiment' in self.params.analysis_types:
-            os.unlink(out_tab_snt_path)
-            os.unlink(out_tab_snt_path + '.manifest')
-        if self.params.analysis_types and not {'entities', 'tags'} & self.params.analysis_types:
-            os.unlink(out_tab_ent_path)
-            os.unlink(out_tab_ent_path + '.manifest')
-        if self.params.analysis_types and not 'relations' in self.params.analysis_types:
-            os.unlink(out_tab_rel_path)
-            os.unlink(out_tab_rel_path + '.manifest')
-        if not self.params.full_analysis_output:
-            os.unlink(out_tab_full_path)
-            os.unlink(out_tab_full_path + '.manifest')
 
         print('the analysis has finished successfully, {n} documents with {ch} characters were analyzed'.format(n=doc_count, ch=used_chars))
         sys.stdout.flush()
@@ -221,45 +218,87 @@ class AnalysisApp:
                     batch_stream, itertools.repeat(req), url=url, user_key=user_key,
                     session=session
                 ):
-                    yield from batch_analysis
+                    yield batch_analysis
 
     def get_request(self):
         req = {
-            'customerId': self.params.customer_id
+            'customerId': self.params.customer_id,
+            'correction': self.params.correction,
+            'diacritization': self.params.diacritization,
+            'returnMentions': True
         }
-        if self.params.analysis_types:
-            req['analysisTypes'] = list(self.params.analysis_types)
         if self.params.language:
             req['language'] = self.params.language
         if self.params.domain:
             req['domain'] = self.params.domain
-        if self.params.correction:
-            req['correction'] = self.params.correction
-        if self.params.diacritization:
-            req['diacritization'] = self.params.diacritization
         if self.params.reference_date:
             req['referenceDate'] = self.params.reference_date
-        if self.params.full_analysis_output:
-            req['returnMentions'] = True
         return req
 
     def doc_batch_stream(self, row_stream):
         for rows in slice_stream(row_stream, self.params.doc_batch_size):
-            yield list(map(self.row_to_doc, rows))
+            yield [doc for row in rows for doc in self.row_to_docs(row)]
 
-    def row_to_doc(self, row):
+    def row_to_docs(self, row):
         def join_cols(columns):
             return '\n\n'.join(row[col] for col in columns if row[col])
 
-        doc = {
-            'id': json.dumps(list(row[id_col] for id_col in self.params.id_cols)),
-            'text': join_cols(self.params.text_cols)
+        ids = [row[id_col] for id_col in self.params.id_cols]
+        yield {
+            'id': json.dumps(['txt'] + ids),
+            self.sect_to_segm['text']: join_cols(self.params.txt_cols)
         }
-        if self.params.title_cols:
-            doc['title'] = join_cols(self.params.title_cols)
-        if self.params.lead_cols:
-            doc['lead'] = join_cols(self.params.lead_cols)
-        return doc
+        if self.params.pos_cols:
+            yield {
+                'id': json.dumps(['pos'] + ids),
+                self.sect_to_segm['positives']: join_cols(self.params.pos_cols)
+            }
+        if self.params.neg_cols:
+            yield {
+                'id': json.dumps(['neg'] + ids),
+                self.sect_to_segm['negatives']: join_cols(self.params.pos_cols)
+            }
+
+    def proc_batch_analysis(self, batch_analysis):
+        grouped = defaultdict(dict)
+        for doc_analysis in batch_analysis:
+            doc_type, *ids = json.loads(doc_analysis['id'])
+            grouped[tuple(ids)][doc_type] = doc_analysis
+
+        for ids, analysis_by_type in grouped.items():
+            doc_analysis = analysis_by_type['txt']
+            doc_analysis['id'] = json.dumps(list(ids))
+            self.proc_entities(doc_analysis['entities'], 'txt')
+            if 'pos' in analysis_by_type:
+                pos_analysis = analysis_by_type['pos']
+                self.proc_entities(pos_analysis['entities'], 'pos')
+                self.copy_analysis(pos_analysis, doc_analysis)
+            if 'neg' in analysis_by_type:
+                neg_analysis = analysis_by_type['neg']
+                self.proc_entities(neg_analysis['entities'], 'neg')
+                self.copy_analysis(neg_analysis, doc_analysis)
+            yield doc_analysis
+
+    def proc_entities(self, entities, doc_type):
+        feedback_entities = [e for e in entities if e['type'] in self.params.feedback_entities]
+        for ent in feedback_entities:
+            polarity = ent.get('sentiment', {}).get('polarity', 0)
+            if doc_type == 'pos' or (doc_type == 'txt' and polarity >= 0):
+                pos_ent = dict(ent)
+                pos_ent['type'] += '-pos'
+                pos_ent.pop('sentiment', None)
+                entities.append(pos_ent)
+            if doc_type == 'neg' or (doc_type == 'txt' and polarity < 0):
+                neg_ent = dict(ent)
+                neg_ent['type'] += '-neg'
+                neg_ent.pop('sentiment', None)
+                entities.append(neg_ent)
+
+    def copy_analysis(self, source_analysis, target_analysis):
+        target_analysis['usedChars'] += source_analysis['usedChars']
+        target_analysis['sentences'] += source_analysis['sentences']
+        target_analysis['entities'] += source_analysis['entities']
+        target_analysis['relations'] += source_analysis['relations']
 
     def analysis_to_doc_result(self, doc_analysis):
         doc_ids_vals = zip(self.params.id_cols, json.loads(doc_analysis['id']))
@@ -280,83 +319,79 @@ class AnalysisApp:
         yield doc_res
 
     def analysis_to_snt_result(self, doc_analysis):
-        if 'sentences' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for index, snt in enumerate(doc_analysis['sentences']):
-                snt_res = {
-                    'index': index,
-                    'segment': snt['segment'],
-                    'text': snt['text']
-                }
-                if 'sentiment' in snt:
-                    snt_res['sentimentValue'] = snt['sentiment']['value']
-                    snt_res['sentimentPolarity'] = snt['sentiment']['polarity']
-                    snt_res['sentimentLabel'] = snt['sentiment']['label']
-                else:
-                    snt_res['sentimentValue'] = None
-                    snt_res['sentimentPolarity'] = None
-                    snt_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    snt_res[id_col] = val
-                yield snt_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for index, snt in enumerate(doc_analysis['sentences']):
+            snt_res = {
+                'index': index,
+                'segment': self.segm_to_sect[snt['segment']],
+                'text': snt['text']
+            }
+            if 'sentiment' in snt:
+                snt_res['sentimentValue'] = snt['sentiment']['value']
+                snt_res['sentimentPolarity'] = snt['sentiment']['polarity']
+                snt_res['sentimentLabel'] = snt['sentiment']['label']
+            else:
+                snt_res['sentimentValue'] = None
+                snt_res['sentimentPolarity'] = None
+                snt_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                snt_res[id_col] = val
+            yield snt_res
 
     def analysis_to_ent_result(self, doc_analysis):
-        if 'entities' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for ent in doc_analysis['entities']:
-                ent_res = {
-                    'type': ent['type'],
-                    'text': ent['text'],
-                    'score': ent['score'],
-                    'entityUid': ent.get('uid')
-                }
-                if 'sentiment' in ent:
-                    ent_res['sentimentValue'] = ent['sentiment']['value']
-                    ent_res['sentimentPolarity'] = ent['sentiment']['polarity']
-                    ent_res['sentimentLabel'] = ent['sentiment']['label']
-                else:
-                    ent_res['sentimentValue'] = None
-                    ent_res['sentimentPolarity'] = None
-                    ent_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    ent_res[id_col] = val
-                yield ent_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for ent in doc_analysis['entities']:
+            ent_res = {
+                'type': ent['type'],
+                'text': ent['text'],
+                'score': ent['score'],
+                'entityUid': ent.get('uid')
+            }
+            if 'sentiment' in ent:
+                ent_res['sentimentValue'] = ent['sentiment']['value']
+                ent_res['sentimentPolarity'] = ent['sentiment']['polarity']
+                ent_res['sentimentLabel'] = ent['sentiment']['label']
+            else:
+                ent_res['sentimentValue'] = None
+                ent_res['sentimentPolarity'] = None
+                ent_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                ent_res[id_col] = val
+            yield ent_res
 
     def analysis_to_rel_result(self, doc_analysis):
-        if 'relations' in doc_analysis:
-            doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
-            for rel in doc_analysis['relations']:
-                rel_res = {
-                    'type': rel['type'],
-                    'name': rel['name'],
-                    'negated': rel['negated'],
-                    'subject': rel.get('subjectName'),
-                    'subjectType': rel.get('subjectType'),
-                    'subjectUid': rel.get('subjectUid'),
-                    'object': rel.get('objectName'),
-                    'objectType': rel.get('objectType'),
-                    'objectUid': rel.get('objectUid')
-                }
-                if 'sentiment' in rel:
-                    rel_res['sentimentValue'] = rel['sentiment']['value']
-                    rel_res['sentimentPolarity'] = rel['sentiment']['polarity']
-                    rel_res['sentimentLabel'] = rel['sentiment']['label']
-                else:
-                    rel_res['sentimentValue'] = None
-                    rel_res['sentimentPolarity'] = None
-                    rel_res['sentimentLabel'] = None
-                for id_col, val in doc_ids_vals:
-                    rel_res[id_col] = val
-                yield rel_res
+        doc_ids_vals = list(zip(self.params.id_cols, json.loads(doc_analysis['id'])))
+        for rel in doc_analysis['relations']:
+            rel_res = {
+                'type': rel['type'],
+                'name': rel['name'],
+                'negated': rel['negated'],
+                'subject': rel.get('subjectName'),
+                'subjectType': rel.get('subjectType'),
+                'subjectUid': rel.get('subjectUid'),
+                'object': rel.get('objectName'),
+                'objectType': rel.get('objectType'),
+                'objectUid': rel.get('objectUid')
+            }
+            if 'sentiment' in rel:
+                rel_res['sentimentValue'] = rel['sentiment']['value']
+                rel_res['sentimentPolarity'] = rel['sentiment']['polarity']
+                rel_res['sentimentLabel'] = rel['sentiment']['label']
+            else:
+                rel_res['sentimentValue'] = None
+                rel_res['sentimentPolarity'] = None
+                rel_res['sentimentLabel'] = None
+            for id_col, val in doc_ids_vals:
+                rel_res[id_col] = val
+            yield rel_res
 
     def analysis_to_full_result(self, doc_analysis):
-        if self.params.full_analysis_output:
-            full_res = {
-                'binaryData': serialize_data(doc_analysis)
-            }
-            for id_col, val in zip(self.params.id_cols, json.loads(doc_analysis['id'])):
-                full_res[id_col] = val
-            yield full_res
+        full_res = {
+            'binaryData': serialize_data(doc_analysis)
+        }
+        for id_col, val in zip(self.params.id_cols, json.loads(doc_analysis['id'])):
+            full_res[id_col] = val
+        yield full_res
 
     def get_doc_tab_fields(self):
         fields = self.params.id_cols + ['language']
