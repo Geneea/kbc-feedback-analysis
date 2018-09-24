@@ -50,6 +50,7 @@ Mapped to `/data/config.json`
     "language": "cs",
     "domain": "retail",
     "feedback_entities": ["service", "product"],
+    "feedback_relations": ["ATTR"],
     "correction": "aggresive",
     "diacritization": "auto",
     "use_beta": false

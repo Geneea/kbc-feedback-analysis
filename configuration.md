@@ -8,6 +8,7 @@ Input options:
 * `language` - the language of the text; leave empty for automatic detection
 * `domain` - the domain or type of the text
 * `feedback_entities` - entity types which should be analyzed for sentiment
+* `feedback_relations` - relation types which should be analyzed for sentiment
 * `correction` - indicates whether common typos should be corrected before analysis
 * `diacritization` - before analysing Czech text where diacritics are missing, add all the wedges and accents. For example, _Muj ctyrnohy pritel_ is changed to _Můj čtyřnohý přítel_.
 * `use_beta` - use Geneea's beta server (use only when instructed to do so)

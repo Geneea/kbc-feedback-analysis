@@ -39,6 +39,7 @@ class Params:
         self.user_key = self.get_user_key()
         self.source_tab_path = self.get_source_tab_path()
         self.feedback_entities = self.get_feedback_entities()
+        self.feedback_relations = self.get_feedback_relations()
 
         params = self.get_parameters()
         columns = params.get('columns', {})
@@ -78,6 +79,10 @@ class Params:
         types = self.get_parameters().get('feedback_entities', [])
         return set(t.strip().lower() for t in types if isinstance(t, str))
 
+    def get_feedback_relations(self):
+        types = self.get_parameters().get('feedback_relations', [])
+        return set(t.strip().upper() for t in types if isinstance(t, str))
+
     def get_config_data(self):
         config_data = self.config.config_data
         return config_data if config_data and isinstance(config_data, dict) else {}
@@ -101,8 +106,8 @@ class Params:
             raise ValueError('exactly one INPUT table mapping needs to be specified')
         if not self.id_cols or not self.txt_cols:
             raise ValueError('the "columns.id" and "columns.text" are required parameters')
-        if not self.feedback_entities:
-            raise ValueError('invalid "feedback_entities" parameter')
+        if not self.feedback_entities and not self.feedback_relations:
+            raise ValueError('invalid "feedback_entities" or "feedback_relations" parameter')
         for cols in (self.id_cols, self.txt_cols, self.pos_cols, self.neg_cols):
             if not isinstance(cols, list):
                 raise ValueError('invalid "column" parameter, all values need to be an array of column names')
@@ -269,13 +274,16 @@ class AnalysisApp:
             doc_analysis = analysis_by_type['txt']
             doc_analysis['id'] = json.dumps(list(ids))
             self.proc_entities(doc_analysis['entities'], 'txt')
+            self.proc_relations(doc_analysis['relations'], 'txt')
             if 'pos' in analysis_by_type:
                 pos_analysis = analysis_by_type['pos']
                 self.proc_entities(pos_analysis['entities'], 'pos')
+                self.proc_relations(pos_analysis['relations'], 'pos')
                 self.copy_analysis(pos_analysis, doc_analysis)
             if 'neg' in analysis_by_type:
                 neg_analysis = analysis_by_type['neg']
                 self.proc_entities(neg_analysis['entities'], 'neg')
+                self.proc_relations(neg_analysis['relations'], 'neg')
                 self.copy_analysis(neg_analysis, doc_analysis)
             yield doc_analysis
 
@@ -293,6 +301,21 @@ class AnalysisApp:
                 neg_ent['type'] += '-neg'
                 neg_ent.pop('sentiment', None)
                 entities.append(neg_ent)
+
+    def proc_relations(self, relations, doc_type):
+        feedback_relations = [r for r in relations if r['type'] in self.params.feedback_relations]
+        for rel in feedback_relations:
+            polarity = rel.get('sentiment', {}).get('polarity', 0)
+            if doc_type == 'pos' or (doc_type == 'txt' and polarity >= 0):
+                pos_rel = dict(rel)
+                pos_rel['type'] += '-pos'
+                pos_rel.pop('sentiment', None)
+                relations.append(pos_rel)
+            if doc_type == 'neg' or (doc_type == 'txt' and polarity < 0):
+                neg_rel = dict(rel)
+                neg_rel['type'] += '-neg'
+                neg_rel.pop('sentiment', None)
+                relations.append(neg_rel)
 
     def copy_analysis(self, source_analysis, target_analysis):
         target_analysis['usedChars'] += source_analysis['usedChars']
