@@ -10,6 +10,7 @@ import requests
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 
 from keboola import docker
 
@@ -139,12 +140,12 @@ class AnalysisApp:
         self.params = Params.init(data_dir)
         self.validate_input()
 
-        self.sect_to_segm = {
-            'text': 'text',
-            'positives': 'title',
-            'negatives': 'lead'
+        self.doc_type_to_segm = {
+            'txt': 'text',
+            'pos': 'title',
+            'neg': 'lead'
         }
-        self.segm_to_sect = {
+        self.segm_to_section = {
             'text': 'text',
             'title': 'positives',
             'lead': 'negatives'
@@ -251,17 +252,17 @@ class AnalysisApp:
         ids = [row[id_col] for id_col in self.params.id_cols]
         yield {
             'id': json.dumps(['txt'] + ids),
-            self.sect_to_segm['text']: join_cols(self.params.txt_cols)
+            self.doc_type_to_segm['txt']: join_cols(self.params.txt_cols)
         }
         if self.params.pos_cols:
             yield {
                 'id': json.dumps(['pos'] + ids),
-                self.sect_to_segm['positives']: join_cols(self.params.pos_cols)
+                self.doc_type_to_segm['pos']: join_cols(self.params.pos_cols)
             }
         if self.params.neg_cols:
             yield {
                 'id': json.dumps(['neg'] + ids),
-                self.sect_to_segm['negatives']: join_cols(self.params.pos_cols)
+                self.doc_type_to_segm['neg']: join_cols(self.params.pos_cols)
             }
 
     def proc_batch_analysis(self, batch_analysis):
@@ -279,12 +280,12 @@ class AnalysisApp:
                 pos_analysis = analysis_by_type['pos']
                 self.proc_entities(pos_analysis['entities'], 'pos')
                 self.proc_relations(pos_analysis['relations'], 'pos')
-                self.copy_analysis(pos_analysis, doc_analysis)
+                self.copy_analysis(pos_analysis, doc_analysis, 'pos')
             if 'neg' in analysis_by_type:
                 neg_analysis = analysis_by_type['neg']
                 self.proc_entities(neg_analysis['entities'], 'neg')
                 self.proc_relations(neg_analysis['relations'], 'neg')
-                self.copy_analysis(neg_analysis, doc_analysis)
+                self.copy_analysis(neg_analysis, doc_analysis, 'neg')
             yield doc_analysis
 
     def proc_entities(self, entities, doc_type):
@@ -292,12 +293,12 @@ class AnalysisApp:
         for ent in feedback_entities:
             polarity = ent.get('sentiment', {}).get('polarity', 0)
             if doc_type == 'pos' or (doc_type == 'txt' and polarity >= 0):
-                pos_ent = dict(ent)
+                pos_ent = deepcopy(ent)
                 pos_ent['type'] += '-pos'
                 pos_ent.pop('sentiment', None)
                 entities.append(pos_ent)
             if doc_type == 'neg' or (doc_type == 'txt' and polarity < 0):
-                neg_ent = dict(ent)
+                neg_ent = deepcopy(ent)
                 neg_ent['type'] += '-neg'
                 neg_ent.pop('sentiment', None)
                 entities.append(neg_ent)
@@ -307,21 +308,40 @@ class AnalysisApp:
         for rel in feedback_relations:
             polarity = rel.get('sentiment', {}).get('polarity', 0)
             if doc_type == 'pos' or (doc_type == 'txt' and polarity >= 0):
-                pos_rel = dict(rel)
+                pos_rel = deepcopy(rel)
                 pos_rel['type'] += '-pos'
                 pos_rel.pop('sentiment', None)
                 relations.append(pos_rel)
             if doc_type == 'neg' or (doc_type == 'txt' and polarity < 0):
-                neg_rel = dict(rel)
+                neg_rel = deepcopy(rel)
                 neg_rel['type'] += '-neg'
                 neg_rel.pop('sentiment', None)
                 relations.append(neg_rel)
 
-    def copy_analysis(self, source_analysis, target_analysis):
+    def copy_analysis(self, source_analysis, target_analysis, doc_type):
+        segment = self.doc_type_to_segm[doc_type]
+        target_analysis[segment] = source_analysis[segment]
         target_analysis['usedChars'] += source_analysis['usedChars']
         target_analysis['sentences'] += source_analysis['sentences']
-        target_analysis['entities'] += source_analysis['entities']
-        target_analysis['relations'] += source_analysis['relations']
+
+        ent_key = lambda e: tuple([e['type'], e['text']])
+        entities_by_key = {ent_key(e): e for e in target_analysis['entities']}
+        for ent in source_analysis['entities']:
+            target_ent = entities_by_key.get(ent_key(ent))
+            if target_ent:
+                target_ent['score'] = max(target_ent['score'], ent['score'])
+                target_ent['mentions'].append(ent['mentions'])
+            else:
+                target_analysis['entities'].append(ent)
+
+        rel_key = lambda r: tuple([r['type'], r['name'], r['negated'], r.get('subjectName'), r.get('objectName')])
+        relations_by_key = {rel_key(r): r for r in target_analysis['relations']}
+        for rel in source_analysis['relations']:
+            target_rel = relations_by_key.get(rel_key(rel))
+            if target_rel:
+                target_rel['support'].append(rel['support'])
+            else:
+                target_analysis['relations'].append(rel)
 
     def analysis_to_doc_result(self, doc_analysis):
         doc_ids_vals = zip(self.params.id_cols, json.loads(doc_analysis['id']))
@@ -346,7 +366,7 @@ class AnalysisApp:
         for index, snt in enumerate(doc_analysis['sentences']):
             snt_res = {
                 'index': index,
-                'segment': self.segm_to_sect[snt['segment']],
+                'segment': self.segm_to_section[snt['segment']],
                 'text': snt['text']
             }
             if 'sentiment' in snt:
