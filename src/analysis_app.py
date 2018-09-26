@@ -330,7 +330,7 @@ class AnalysisApp:
             target_ent = entities_by_key.get(ent_key(ent))
             if target_ent:
                 target_ent['score'] = max(target_ent['score'], ent['score'])
-                target_ent['mentions'].append(ent['mentions'])
+                target_ent['mentions'] += ent['mentions']
             else:
                 target_analysis['entities'].append(ent)
 
@@ -339,7 +339,7 @@ class AnalysisApp:
         for rel in source_analysis['relations']:
             target_rel = relations_by_key.get(rel_key(rel))
             if target_rel:
-                target_rel['support'].append(rel['support'])
+                target_rel['support'] += rel['support']
             else:
                 target_analysis['relations'].append(rel)
 
