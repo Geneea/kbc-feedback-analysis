@@ -1,4 +1,4 @@
-# VERSION 1.2.1
+# VERSION 1.2.2
 
 FROM quay.io/keboola/docker-custom-python:1.5.4
 MAINTAINER Tomáš Mudruňka <mudrunka@geneea.com>

@@ -262,7 +262,7 @@ class AnalysisApp:
         if self.params.neg_cols:
             yield {
                 'id': json.dumps(['neg'] + ids),
-                self.doc_type_to_segm['neg']: join_cols(self.params.pos_cols)
+                self.doc_type_to_segm['neg']: join_cols(self.params.neg_cols)
             }
 
     def proc_batch_analysis(self, batch_analysis):
